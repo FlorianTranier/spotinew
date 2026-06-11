@@ -8,6 +8,10 @@ on:
     - cron: "0 0 * * *"
   workflow_dispatch: {} # permet aussi de lancer manuellement depuis l'onglet Actions
 
+# Nécessaire pour que le workflow puisse committer state.json (date du dernier scan).
+permissions:
+  contents: write
+
 jobs:
   sync:
     runs-on: ubuntu-latest
@@ -31,3 +35,15 @@ jobs:
           SPOTIFY_PLAYLIST_NAME: ${{ vars.SPOTIFY_PLAYLIST_NAME }}
           SPOTIFY_PLAYLIST_ID: ${{ vars.SPOTIFY_PLAYLIST_ID }}
         run: python src/sync.py
+
+      - name: Persister la date du dernier scan
+        run: |
+          if [ -n "$(git status --porcelain state.json)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add state.json
+            git commit -m "chore: date du dernier scan [skip ci]"
+            git push
+          else
+            echo "state.json inchangé — rien à committer."
+          fi

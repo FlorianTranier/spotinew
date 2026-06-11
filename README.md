@@ -12,17 +12,19 @@ Tourne tout seul dans le cloud via **GitHub Actions** (gratuit, même PC éteint
 À chaque exécution, le script :
 
 1. récupère la liste de tes **artistes suivis** ;
-2. détermine la **fenêtre de scan** : il repart de la date du **dernier titre
-   ajouté** à la playlist (= dernier scan) ; au tout premier passage (playlist
-   vide), il part de `START_DATE` ;
+2. détermine la **fenêtre de scan** : il repart du **lendemain du dernier scan**
+   (date mémorisée dans `state.json`) ; au tout premier passage, il part de
+   `START_DATE` ;
 3. liste leurs **albums / singles** parus dans cette fenêtre ;
-4. récupère les **pistes** et les **ajoute à la playlist** en évitant les doublons
-   (comparaison au contenu actuel — **aucun fichier d'état à gérer**).
+4. récupère les **pistes** et les **ajoute à la playlist** en évitant les doublons ;
+5. **enregistre la date de ce scan** dans `state.json` (committé par le workflow).
 
-> ⏱️ **Reprise incrémentale.** Le repère « dernier scan » est lu directement
-> depuis la playlist (date d'ajout la plus récente). Inutile de stocker un état
-> ou de donner des droits d'écriture Git à GitHub Actions ; les doublons restent
-> impossibles grâce à la comparaison avec la playlist.
+> ⏱️ **Reprise incrémentale persistante.** La date du dernier scan est stockée
+> dans [`state.json`](state.json), **indépendamment de la playlist**. Tu peux donc
+> écouter puis **supprimer les titres** de la playlist pour faire ton tri : le
+> prochain scan repartira quand même du dernier scan, et **jamais** de
+> `START_DATE`. Le scan repart du *lendemain* du dernier scan pour ne pas te
+> reproposer un titre déjà écouté et supprimé.
 
 > 💡 Spotify propose déjà une playlist auto « Release Radar », mais limitée à
 > ~30 titres et non paramétrable. spotinew te donne le contrôle total
@@ -111,5 +113,13 @@ python src/sync.py
   (`album` + `single`), pas les compilations où ils apparaissent.
 - Le **dédoublonnage** se fait au niveau des pistes par rapport au contenu actuel
   de la playlist : tu peux relancer sans risque de doublons.
+- La date du dernier scan est dans [`state.json`](state.json), mis à jour
+  automatiquement par le workflow (un petit commit `chore: date du dernier scan`
+  chaque jour). Pour **forcer un re-scan complet** depuis `START_DATE`, supprime
+  simplement `state.json`.
+- ⚠️ **Droits du workflow.** Le workflow committe `state.json` ; il déclare déjà
+  `permissions: contents: write`. Si le `git push` échoue, va dans
+  **Settings → Actions → General → Workflow permissions** et coche
+  **« Read and write permissions »**.
 - Modifier l'heure / la fréquence : édite la ligne `cron` dans
   [.github/workflows/sync.yml](.github/workflows/sync.yml).

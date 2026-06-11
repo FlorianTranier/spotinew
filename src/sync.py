@@ -6,19 +6,23 @@ Conçu pour tourner sans interaction (GitHub Actions) grâce à un refresh token
 
 Logique :
   1. Récupère les artistes suivis (scope user-follow-read).
-  2. Pour chaque artiste, liste ses albums/singles parus >= START_DATE.
-  3. Récupère les pistes de ces sorties.
-  4. Ajoute à la playlist celles qui n'y sont pas déjà (dédoublonnage robuste).
+  2. Détermine la fenêtre de scan à partir de la date du dernier scan,
+     persistée dans state.json (ou START_DATE au tout premier passage).
+  3. Pour chaque artiste, liste ses albums/singles parus dans la fenêtre.
+  4. Ajoute à la playlist les pistes absentes (dédoublonnage).
+  5. Enregistre la date de ce scan dans state.json pour le prochain passage.
 
-Le script est « sans état » : à chaque exécution il compare les nouveautés au
-contenu actuel de la playlist. Pas de fichier d'état à maintenir.
+La date du dernier scan est stockée dans un fichier (state.json), indépendamment
+du contenu de la playlist : tu peux donc écouter puis supprimer les titres de la
+playlist sans que le scan reparte de START_DATE.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import sys
-from datetime import date
+from datetime import date, timedelta
 
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
@@ -42,6 +46,26 @@ def env(name, default=None, required=False):
     if required and not val:
         sys.exit(f"[ERREUR] Variable d'environnement manquante : {name}")
     return val
+
+
+def state_path():
+    return env("STATE_FILE", "state.json")
+
+
+def load_last_scan():
+    """Lit la date du dernier scan depuis state.json (None si absent/illisible)."""
+    try:
+        with open(state_path(), encoding="utf-8") as f:
+            return date.fromisoformat(json.load(f)["last_scan"])
+    except (FileNotFoundError, KeyError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def save_last_scan(scan_date):
+    """Écrit la date du dernier scan dans state.json."""
+    with open(state_path(), "w", encoding="utf-8") as f:
+        json.dump({"last_scan": scan_date.isoformat()}, f, indent=2)
+        f.write("\n")
 
 
 def get_client():
@@ -135,31 +159,19 @@ def get_album_track_uris(sp, album_id):
     return tracks
 
 
-def get_playlist_state(sp, playlist_id):
-    """Renvoie (IDs des pistes présentes, date d'ajout la plus récente).
-
-    La date du dernier ajout sert de repère « dernier scan » : la prochaine
-    exécution repart de là, au lieu de tout rescanner depuis START_DATE.
-    Aucun fichier d'état à maintenir : tout vient de la playlist.
-    """
+def get_playlist_track_ids(sp, playlist_id):
+    """IDs des pistes actuellement présentes dans la playlist (dédoublonnage)."""
     ids = set()
-    latest_added = None  # chaîne ISO 8601, ex. "2026-06-12T01:23:45Z"
     results = sp.playlist_items(
-        playlist_id,
-        fields="items(added_at,track(id)),next",
-        limit=100,
-        additional_types=("track",),
+        playlist_id, fields="items(track(id)),next", limit=100, additional_types=("track",)
     )
     while results:
         for it in results.get("items", []):
             t = it.get("track")
             if t and t.get("id"):
                 ids.add(t["id"])
-            added = it.get("added_at")
-            if added and (latest_added is None or added > latest_added):
-                latest_added = added
         results = sp.next(results) if results.get("next") else None
-    return ids, latest_added
+    return ids
 
 
 def find_or_create_playlist(sp, me):
@@ -205,19 +217,21 @@ def main():
     playlist_id = find_or_create_playlist(sp, me)
     print(f"[INFO] Playlist cible : {playlist_id}")
 
-    existing, latest_added = get_playlist_state(sp, playlist_id)
+    existing = get_playlist_track_ids(sp, playlist_id)
     print(f"[INFO] {len(existing)} titre(s) déjà dans la playlist.")
 
-    # Fenêtre de scan : on repart de la date du dernier titre ajouté (dernier
-    # scan), sans jamais descendre sous START_DATE.
-    if latest_added:
-        last_scan = date.fromisoformat(latest_added[:10])
-        floor = max(start_date, last_scan)
-        print(f"[INFO] Dernier ajout : {last_scan.isoformat()} → "
-              f"scan depuis {floor.isoformat()}.")
+    # Fenêtre de scan : on repart du LENDEMAIN du dernier scan (pour ne pas
+    # reproposer un titre déjà traité), sans jamais descendre sous START_DATE.
+    # state.json étant indépendant de la playlist, vider celle-ci ne réinitialise
+    # pas le point de départ.
+    last_scan = load_last_scan()
+    if last_scan:
+        floor = max(start_date, last_scan + timedelta(days=1))
+        print(f"[INFO] Dernier scan : {last_scan.isoformat()} → "
+              f"sorties à partir de {floor.isoformat()}.")
     else:
         floor = start_date
-        print(f"[INFO] Playlist vide → scan complet depuis START_DATE "
+        print(f"[INFO] Aucun scan précédent → depuis START_DATE "
               f"({floor.isoformat()}).")
 
     artists = get_followed_artists(sp)
@@ -242,14 +256,18 @@ def main():
     new_tracks.sort(key=lambda x: x[0])
     uris = [uri for _, uri in new_tracks]
 
-    if not uris:
-        print("[OK] Aucune nouveauté à ajouter. Playlist déjà à jour.")
-        return
+    if uris:
+        for batch in chunked(uris, 100):
+            sp.playlist_add_items(playlist_id, batch)
+        print(f"[OK] {len(uris)} titre(s) ajouté(s) à la playlist.")
+    else:
+        print("[OK] Aucune nouveauté à ajouter.")
 
-    for batch in chunked(uris, 100):
-        sp.playlist_add_items(playlist_id, batch)
-
-    print(f"[OK] {len(uris)} titre(s) ajouté(s) à la playlist.")
+    # On enregistre la date de ce scan APRÈS succès, pour repartir de là au
+    # prochain passage (même si la playlist est vidée entre-temps).
+    today = date.today()
+    save_last_scan(today)
+    print(f"[INFO] Date du dernier scan enregistrée : {today.isoformat()}")
 
 
 if __name__ == "__main__":
