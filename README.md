@@ -88,7 +88,7 @@ python src/sync.py
      - `START_DATE` → ex. `2026-01-01`
      - `SPOTIFY_PLAYLIST_NAME` → ex. `Nouveautés abonnements`
      - `SPOTIFY_PLAYLIST_ID` *(facultatif)* — pour cibler une playlist précise.
-3. C'est tout. Le workflow tourne **chaque jour à 00:00 UTC (≈ 02:00 à Paris)**.
+3. C'est tout. Le workflow tourne **chaque jour à 02:00 UTC (≈ 04:00 à Paris en été)**.
    Tu peux aussi le lancer à la main : onglet **Actions → spotinew → Run workflow**.
 
 ---
