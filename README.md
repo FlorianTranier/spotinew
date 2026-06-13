@@ -3,7 +3,8 @@
 Ajoute automatiquement, chaque jour, les **nouvelles sorties de tes artistes
 suivis sur Spotify** dans une **playlist dédiée**, à partir d'une date donnée.
 
-Tourne tout seul dans le cloud via **GitHub Actions** (gratuit, même PC éteint).
+Tourne tout seul dans le cloud via **GitHub Actions** (gratuit, même PC éteint),
+ou en **self-hosting** via Docker.
 
 ---
 
@@ -17,7 +18,7 @@ Tourne tout seul dans le cloud via **GitHub Actions** (gratuit, même PC éteint
    `START_DATE` ;
 3. liste leurs **albums / singles** parus dans cette fenêtre ;
 4. récupère les **pistes** et les **ajoute à la playlist** en évitant les doublons ;
-5. **enregistre la date de ce scan** dans `state.json` (committé par le workflow).
+5. **enregistre la date de ce scan** dans `state.json` (committé par le workflow GitHub Actions, ou persisté dans un volume Docker en self-hosting).
 
 > ⏱️ **Reprise incrémentale persistante.** La date du dernier scan est stockée
 > dans [`state.json`](state.json), **indépendamment de la playlist**. Tu peux donc
@@ -76,7 +77,11 @@ dans `.env`, puis :
 python src/sync.py
 ```
 
-### Étape 4 — Automatiser avec GitHub Actions
+### Étape 4 — Automatiser
+
+Deux options selon ton infrastructure :
+
+#### Option A — GitHub Actions (cloud, gratuit)
 
 1. Crée un dépôt GitHub et pousse ce projet.
 2. Dans **Settings → Secrets and variables → Actions** :
@@ -90,6 +95,48 @@ python src/sync.py
      - `SPOTIFY_PLAYLIST_ID` *(facultatif)* — pour cibler une playlist précise.
 3. C'est tout. Le workflow tourne **chaque jour à 02:00 UTC (≈ 04:00 à Paris en été)**.
    Tu peux aussi le lancer à la main : onglet **Actions → spotinew → Run workflow**.
+
+#### Option B — Self-hosting avec Docker
+
+L'image est publiée automatiquement sur GitHub Container Registry à chaque push sur `main`.
+
+1. Sur ton serveur, crée un fichier de secrets (une seule fois) :
+   ```bash
+   # /etc/spotinew.env  —  chmod 600
+   SPOTIFY_CLIENT_ID=xxx
+   SPOTIFY_CLIENT_SECRET=xxx
+   SPOTIFY_REFRESH_TOKEN=xxx
+   START_DATE=2026-01-01
+   SPOTIFY_PLAYLIST_ID=xxx
+   ```
+
+2. Crée un répertoire persistant pour `state.json` :
+   ```bash
+   mkdir -p /var/lib/spotinew
+   ```
+
+3. Lance le conteneur (à planifier via cron, systemd timer, etc.) :
+
+   **Avec `docker run` :**
+   ```bash
+   docker run --rm \
+     --env-file /etc/spotinew.env \
+     -v /var/lib/spotinew:/data \
+     ghcr.io/floriantranier/spotinew:latest
+   ```
+
+   **Avec Docker Compose (`docker compose run spotinew`) :**
+   ```yaml
+   services:
+     spotinew:
+       image: ghcr.io/floriantranier/spotinew:latest
+       env_file: /etc/spotinew.env
+       volumes:
+         - /var/lib/spotinew:/data
+   ```
+
+> `state.json` est stocké dans `/var/lib/spotinew` et persisté entre les exécutions.
+> Pour forcer un re-scan complet depuis `START_DATE`, supprime ce fichier.
 
 ---
 
@@ -114,9 +161,9 @@ python src/sync.py
 - Le **dédoublonnage** se fait au niveau des pistes par rapport au contenu actuel
   de la playlist : tu peux relancer sans risque de doublons.
 - La date du dernier scan est dans [`state.json`](state.json), mis à jour
-  automatiquement par le workflow (un petit commit `chore: date du dernier scan`
-  chaque jour). Pour **forcer un re-scan complet** depuis `START_DATE`, supprime
-  simplement `state.json`.
+  automatiquement par le workflow GitHub Actions (commit quotidien) ou persisté
+  dans le volume Docker. Pour **forcer un re-scan complet** depuis `START_DATE`,
+  supprime simplement `state.json`.
 - ⚠️ **Droits du workflow.** Le workflow committe `state.json` ; il déclare déjà
   `permissions: contents: write`. Si le `git push` échoue, va dans
   **Settings → Actions → General → Workflow permissions** et coche
